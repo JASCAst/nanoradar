@@ -388,14 +388,18 @@ async def obtener_zonas_deteccion():
 @router.post("/zonas_deteccion")
 async def agregar_zona(zona: nuevaZona): 
 
-    next_id_doc = ZONAS_COLLECTION.find_one_and_update(
-        {"_id": "zonas_id"},
-        {"$inc": {"sequence_value": 1}},
-        return_document=True,
-        upsert=True  # Crea el documento si no existe
-    )
+    ultimo_documento = ZONAS_COLLECTION.find_one(
+            sort=[("_id", -1)]
+        )
     
-    nuevo_id = next_id_doc["sequence_value"]
+    if ultimo_documento:
+        # 3. Convierte el ObjectId a una cadena de texto para que FastAPI lo pueda serializar
+        ultimo_documento["_id"] = str(ultimo_documento["_id"])
+        
+    if ultimo_documento and "id" in ultimo_documento:
+            nuevo_id = int(ultimo_documento["id"]) + 1
+    else:
+        nuevo_id = 1
 
     # 2. Crear el nuevo diccionario de zona con el ID
     nueva_zona_con_id = {
@@ -409,7 +413,9 @@ async def agregar_zona(zona: nuevaZona):
     # 3. Insertar el nuevo documento en la colección de zonas
     ZONAS_COLLECTION.insert_one(nueva_zona_con_id)    
     # 6. Retornar la nueva zona creada
-    return nueva_zona_con_id
+    return {
+            "msg": "Zona creada con éxito."
+            }
 
 
 @router.delete("/zonas/{zona_id}")
