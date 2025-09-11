@@ -387,24 +387,17 @@ async def obtener_zonas_deteccion():
 #crear zonas
 @router.post("/zonas_deteccion")
 async def agregar_zona(zona: nuevaZona): 
-    """
-    Agrega una nueva zona de detección al archivo zonas.json.
-    """
 
-    # 1. Leer las zonas existentes del archivo
-    with open("zonas.json", 'r') as f:
-        zonas = json.load(f)
-        
-    # 2. Determinar el nuevo ID
-    if zonas:
-        # Encuentra el ID más alto en la lista y le suma 1
-        ultimo_id = max(z.get("id", 0) for z in zonas)
-        nuevo_id = ultimo_id + 1
-    else:
-        # Si el archivo está vacío, el primer ID es 1
-        nuevo_id = 1
+    next_id_doc = ZONAS_COLLECTION.find_one_and_update(
+        {"_id": "zonas_id"},
+        {"$inc": {"sequence_value": 1}},
+        return_document=True,
+        upsert=True  # Crea el documento si no existe
+    )
     
-    # 3. Crear el nuevo diccionario de zona con el ID
+    nuevo_id = next_id_doc["sequence_value"]
+
+    # 2. Crear el nuevo diccionario de zona con el ID
     nueva_zona_con_id = {
         "id": nuevo_id,
         "name": zona.name,
@@ -413,35 +406,14 @@ async def agregar_zona(zona: nuevaZona):
         "coordinates": zona.coordinates
     }
     
-    # 4. Agregar la nueva zona a la lista
-    zonas.append(nueva_zona_con_id)
-    ZONAS_COLLECTION.insert_one(nueva_zona_con_id)
-
-    
-    # 5. Sobrescribir el archivo con la lista actualizada
-    with open("zonas.json", 'w') as f:
-        json.dump(zonas, f, indent=4) # Usa indent=4 para un formato legible
-        
+    # 3. Insertar el nuevo documento en la colección de zonas
+    ZONAS_COLLECTION.insert_one(nueva_zona_con_id)    
     # 6. Retornar la nueva zona creada
     return nueva_zona_con_id
 
 
 @router.delete("/zonas/{zona_id}")
 async def eliminar_zona(zona_id):
-    """
-    Elimina una zona de detección del archivo zonas.json.
-    """
-
-    # 1. Leer las zonas existentes del archivo
-    with open("zonas.json", 'r') as f:
-        zonas = json.load(f)
-        
-    # 2. busca la zona en el arreglo
-    zonas = [zona for zona in zonas if str(zona["id"]) != zona_id]
-        
-    # Sobrescribir el archivo con la lista actualizada.
-    with open("zonas.json", 'w') as f:
-        json.dump(zonas, f, indent=4)
         
     ZONAS_COLLECTION.delete_one({"id": int(zona_id)})
     
