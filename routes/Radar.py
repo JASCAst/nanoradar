@@ -24,11 +24,11 @@ CONFIGURACION_DATA_COLLECTION = ASTRADAR_BD["configuracion_radar"]
 ZONAS_COLLECTION = ASTRADAR_BD["zonas"]
 
 # Posición del radar
-RADAR_LAT = float(os.getenv("RADAR_LAT"))
-RADAR_LON = float(os.getenv("RADAR_LON"))
-RADAR_RADIO_M = float(os.getenv("RADAR_RADIO_M")) 
+RADAR_LAT = CONFIGURACION_DATA_COLLECTION.find_one({}, {"_id": 0})["radar"].get("latitud") #float(os.getenv("RADAR_LAT"))
+RADAR_LON = CONFIGURACION_DATA_COLLECTION.find_one({}, {"_id": 0})["radar"].get("longitud")#float(os.getenv("RADAR_LON"))
+RADAR_RADIO_M = CONFIGURACION_DATA_COLLECTION.find_one({}, {"_id": 0})["radar"].get("radar_radio_m")#float(os.getenv("RADAR_RADIO_M")) 
 METROS_POR_GRADO_LATITUD = float(os.getenv("METROS_POR_GRADO_LATITUD"))
-ANGULO_ROTACION = float(os.getenv("ANGULO_ROTACION"))
+ANGULO_ROTACION = CONFIGURACION_DATA_COLLECTION.find_one({}, {"_id": 0})["radar"].get("angulo_rotacion") #float(os.getenv("ANGULO_ROTACION"))
 
 # Funcion encargada de convertir los puntos cardinales en latitud y longitud
 # Los datos transformados dependen totalmente de la latidud y longitud del radar
@@ -55,7 +55,7 @@ def rotate_point(x: float, y: float, angle_degrees: float) -> tuple:
     return (x_rotated, y_rotated)
 
 # Calcula los cuatro vértices del polígono de detección del radar.
-def calcular_vertices_poligono() -> list:
+def calcular_vertices_poligono(RADAR_RADIO_M, ANGULO_ROTACION) -> list:
     # Define los límites del polígono sin rotación
     x_max = RADAR_RADIO_M  # 652 metros al este
     x_min = RADAR_RADIO_M * -1  # -652 metros al oeste
@@ -312,10 +312,10 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.close()
 
 class RadarConfig(BaseModel):
-    radar_lat: Optional[float]
-    radar_lon: Optional[float]
-    radar_radio_m: Optional[float]
-    angulo_rotacion: Optional[float] # Nuevo campo para el ángulo de rotación
+    radar_lat: Optional[str]
+    radar_lon: Optional[str]
+    radar_radio_m: Optional[str]
+    angulo_rotacion: Optional[str] # Nuevo campo para el ángulo de rotación
     
 @router.post("/configurar_radar")
 async def configurar_radar(config: RadarConfig):
@@ -324,10 +324,29 @@ async def configurar_radar(config: RadarConfig):
         dotenv_file = find_dotenv()
         
         # Actualiza las variables en el archivo .env
-        set_key(dotenv_file, "RADAR_LAT", float(config.radar_lat))
-        set_key(dotenv_file, "RADAR_LON", float(config.radar_lon))
-        set_key(dotenv_file, "RADAR_RADIO_M", float(config.radar_radio_m))
-        set_key(dotenv_file, "ANGULO_ROTACION", float(config.angulo_rotacion))
+        set_key(dotenv_file, "RADAR_LAT", str(config.radar_lat))
+        set_key(dotenv_file, "RADAR_LON", str(config.radar_lon))
+        set_key(dotenv_file, "RADAR_RADIO_M", str(config.radar_radio_m))
+        set_key(dotenv_file, "ANGULO_ROTACION", str(config.angulo_rotacion))
+        
+        # Actualizar lso valores en la base de datos 
+        CONFIGURACION_DATA_COLLECTION.update_one(
+            {}, 
+            {
+                "$set": {
+                    "radar":{
+                        "latitud": float(config.radar_lat),
+                        "longitud": float(config.radar_lon),
+                        "radar_radio_m": float(config.radar_radio_m),
+                        "angulo_rotacion": float(config.angulo_rotacion)
+                    },
+                    "poligono": {
+                        "vertices": calcular_vertices_poligono(float(config.radar_radio_m), float(config.angulo_rotacion))
+                    }
+                }
+            },
+            upsert=True
+        )
         
         # Retorna una respuesta de éxito
         return {"mensaje": "Configuración del radar actualizada con éxito."}
@@ -350,23 +369,21 @@ class nuevaZona(BaseModel):
     
 @router.get("/zonas")
 async def obtener_zonas_deteccion():
-    
-    poligono_vertices = calcular_vertices_poligono()
-    
+        
     CONFIGURACION_RADAR = CONFIGURACION_DATA_COLLECTION.find_one({}, {"_id": 0})
     ZONAS_DE_DETECCION = list(ZONAS_COLLECTION.find({}, {"_id": 0}))
     
     return {
         "radar": {
-            "latitud": CONFIGURACION_RADAR["radar"].get("latitud"), 
+            "latitud": CONFIGURACION_RADAR["radar"].get("latitud"),
             "longitud": CONFIGURACION_RADAR["radar"].get("longitud")
             },
         "poligono": {
-            "vertices": CONFIGURACION_RADAR.get("poligono")
+            "vertices": CONFIGURACION_RADAR["poligono"].get("vertices")
             },
         "zonas": ZONAS_DE_DETECCION
         }
-
+    
 #crear zonas
 @router.post("/zonas_deteccion")
 async def agregar_zona(zona: nuevaZona): 
@@ -399,6 +416,7 @@ async def agregar_zona(zona: nuevaZona):
     # 4. Agregar la nueva zona a la lista
     zonas.append(nueva_zona_con_id)
     ZONAS_COLLECTION.insert_one(nueva_zona_con_id)
+
     
     # 5. Sobrescribir el archivo con la lista actualizada
     with open("zonas.json", 'w') as f:

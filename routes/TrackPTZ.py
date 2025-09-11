@@ -17,8 +17,7 @@ load_dotenv()
 # --- 1. CONFIGURACIÓN Y CALIBRACIÓN DE LA CÁMARA ---
 CAM_LAT = float(os.getenv("RADAR_LAT"))  # Latitud de la cámara
 CAM_LON = float(os.getenv("RADAR_LON"))  # Longitud de la cámara
-CAM_ALT = float(os.getenv("CAM_ALT"))  # Altitud en metros sobre el nivel del mar
-
+CAM_ALT = float(os.getenv("CAM_ALT"))  # Altitud en metros sobre el nivel del mar 
 # -- Calibracion punto 0.0 de la camara o hacia donde va a quedar apuntando la camara por defecto
 CAM_HEADING_DEGREES = 200.0
 

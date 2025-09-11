@@ -216,7 +216,7 @@ def absolute_move_camera(camera_id, move: AbsoluteMoveRequest):
 class AuxCommandRequest(BaseModel):
     command: str
     
-@router.get("/cameras/{camera_id}/aux_commands")
+@router.get("/cameras/aux_commands")
 def get_auxiliary_commands(camera_id: str):
     """
     Descubre y devuelve la lista de comandos auxiliares (ej: luces)
@@ -257,7 +257,7 @@ def get_auxiliary_commands(camera_id: str):
 
 
 # --- NUEVO: Endpoint para enviar un comando auxiliar ---
-@router.post("/cameras/{camera_id}/send_aux_command")
+@router.post("/cameras/send_aux_command")
 def send_aux_command(camera_id: str, request: AuxCommandRequest):
     """
     Envía un comando auxiliar específico (ej: para encender/apagar la luz) a la cámara.
