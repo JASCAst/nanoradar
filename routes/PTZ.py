@@ -112,7 +112,7 @@ def move_camera(camera_id, move: MoveRequest):
                 "x": move.zoom
                 }
             }
-    request.Timeout = "PT1S"
+    # request.Timeout = "PT1S"
     ptz.ContinuousMove(request)
     return {"status": "Moviendo"}
 
