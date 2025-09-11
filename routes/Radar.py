@@ -424,3 +424,27 @@ async def agregar_zona(zona: nuevaZona):
         
     # 6. Retornar la nueva zona creada
     return nueva_zona_con_id
+
+
+@router.delete("/zonas/{zona_id}")
+async def eliminar_zona(zona_id):
+    """
+    Elimina una zona de detección del archivo zonas.json.
+    """
+
+    # 1. Leer las zonas existentes del archivo
+    with open("zonas.json", 'r') as f:
+        zonas = json.load(f)
+        
+    # 2. busca la zona en el arreglo
+    zonas = [zona for zona in zonas if str(zona["id"]) != zona_id]
+        
+    # Sobrescribir el archivo con la lista actualizada.
+    with open("zonas.json", 'w') as f:
+        json.dump(zonas, f, indent=4)
+        
+    ZONAS_COLLECTION.delete_one({"id": int(zona_id)})
+    
+    return {
+        "msg": "Zona eliminada de JSON y MongoDB."
+        }

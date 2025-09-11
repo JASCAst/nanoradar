@@ -217,7 +217,7 @@ class AuxCommandRequest(BaseModel):
     command: str
     
 @router.get("/cameras/aux_commands")
-def get_auxiliary_commands(camera_id: str):
+def get_auxiliary_commands(camera_id):
     """
     Descubre y devuelve la lista de comandos auxiliares (ej: luces)
     soportados por una cámara específica.
@@ -258,7 +258,7 @@ def get_auxiliary_commands(camera_id: str):
 
 # --- NUEVO: Endpoint para enviar un comando auxiliar ---
 @router.post("/cameras/send_aux_command")
-def send_aux_command(camera_id: str, request: AuxCommandRequest):
+def send_aux_command(camera_id, request: AuxCommandRequest):
     """
     Envía un comando auxiliar específico (ej: para encender/apagar la luz) a la cámara.
     """
