@@ -44,6 +44,18 @@ def convertir_cartesiano_a_geografico(x_meters: float, y_meters: float) -> tuple
     
     return (new_lat, new_lon)
 
+def convertir_cartesiano_a_geografico_configuracion(x_meters: float, y_meters: float, posiciones: dict) -> tuple:
+    delta_lat = y_meters / METROS_POR_GRADO_LATITUD
+    
+    lat_rad = math.radians(posiciones["radar_lat"])
+    meters_per_lon_degree = METROS_POR_GRADO_LATITUD * math.cos(lat_rad)
+    delta_lon = x_meters / meters_per_lon_degree
+    
+    new_lat = posiciones["radar_lat"] + delta_lat
+    new_lon = posiciones["radar_lon"] + delta_lon
+    
+    return (new_lat, new_lon)
+
 # Mueve la función de rotación a un lugar reutilizable
 def rotate_point(x: float, y: float, angle_degrees: float) -> tuple:
     """Aplica la rotación a un punto (x, y)."""
@@ -55,7 +67,7 @@ def rotate_point(x: float, y: float, angle_degrees: float) -> tuple:
     return (x_rotated, y_rotated)
 
 # Calcula los cuatro vértices del polígono de detección del radar.
-def calcular_vertices_poligono(RADAR_RADIO_M, ANGULO_ROTACION) -> list:
+def calcular_vertices_poligono(RADAR_RADIO_M, ANGULO_ROTACION, posiciones: dict) -> list:
     # Define los límites del polígono sin rotación
     x_max = RADAR_RADIO_M  # 652 metros al este
     x_min = RADAR_RADIO_M * -1  # -652 metros al oeste
@@ -83,10 +95,15 @@ def calcular_vertices_poligono(RADAR_RADIO_M, ANGULO_ROTACION) -> list:
         y_rotated = x * sin_theta + y * cos_theta
         
         # Convierte el vértice rotado a coordenadas geográficas
-        lat, lon = convertir_cartesiano_a_geografico(x_rotated, y_rotated)
+        if posiciones:
+            lat, lon = convertir_cartesiano_a_geografico_configuracion(x_rotated, y_rotated, posiciones)
+        else:
+            lat, lon = convertir_cartesiano_a_geografico(x_rotated, y_rotated)
         rotated_vertices_geographic.append([lat, lon])
 
     return rotated_vertices_geographic
+
+
 
 def punto_en_poligono(point: tuple, polygon: list) -> bool:
     """
@@ -329,6 +346,11 @@ async def configurar_radar(config: RadarConfig):
         set_key(dotenv_file, "RADAR_RADIO_M", str(config.radar_radio_m))
         set_key(dotenv_file, "ANGULO_ROTACION", str(config.angulo_rotacion))
         
+        posiciones = {
+            "radar_lat": float(config.radar_lat),
+            "radar_lon": float(config.radar_lon)
+        }
+        
         # Actualizar lso valores en la base de datos 
         CONFIGURACION_DATA_COLLECTION.update_one(
             {}, 
@@ -341,7 +363,7 @@ async def configurar_radar(config: RadarConfig):
                         "angulo_rotacion": float(config.angulo_rotacion)
                     },
                     "poligono": {
-                        "vertices": calcular_vertices_poligono(float(config.radar_radio_m), float(config.angulo_rotacion))
+                        "vertices": calcular_vertices_poligono(float(config.radar_radio_m), float(config.angulo_rotacion), posiciones)
                     }
                 }
             },
