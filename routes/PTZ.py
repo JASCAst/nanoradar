@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel
 from onvif import ONVIFCamera
 from typing import Optional
+from . import Estado as state
 import os
 import sys
 import time
@@ -101,6 +102,7 @@ def get_connected_cameras():
 
 @router.post("/cameras/move")
 def move_camera(camera_id, move: MoveRequest):
+    state.set_manual_override()
     ptz, token = get_camera_services(camera_id)
     request = ptz.create_type("ContinuousMove")
     request.ProfileToken = token
@@ -118,12 +120,14 @@ def move_camera(camera_id, move: MoveRequest):
 
 @router.post("/cameras/stop")
 def stop_camera(camera_id):
+    state.set_manual_override()
     ptz, token = get_camera_services(camera_id)
     ptz.Stop({"ProfileToken": token})
     return {"status": "Movimiento detenido"}
 
 @router.post("/cameras/goto_home")
 def goto_home_position(camera_id):
+    state.set_manual_override()
     ptz, token = get_camera_services(camera_id)
     ptz.Stop({"ProfileToken": token})
     time.sleep(0.2)
@@ -132,6 +136,7 @@ def goto_home_position(camera_id):
 
 @router.post("/cameras/set_home")
 def set_home_position(camera_id):
+    state.set_manual_override()
     ptz, token = get_camera_services(camera_id)
     ptz.Stop({'ProfileToken': token})
     time.sleep(1)
@@ -140,12 +145,14 @@ def set_home_position(camera_id):
 
 @router.get("/cameras/presets")
 def get_presets(camera_id):
+    state.set_manual_override()
     ptz, token = get_camera_services(camera_id)
     presets_data = ptz.GetPresets({'ProfileToken': token})
     return [{"token": p.token, "name": p.Name} for p in presets_data or []]
 
 @router.post("/cameras/set_preset")
 def set_preset(camera_id, request: PresetRequest):
+    state.set_manual_override()
     ptz, token = get_camera_services(camera_id)
     ptz.Stop({'ProfileToken': token})
     preset_token = ptz.SetPreset({
@@ -156,6 +163,7 @@ def set_preset(camera_id, request: PresetRequest):
 
 @router.post("/cameras/goto_preset")
 def goto_preset(camera_id, request: PresetActionRequest):
+    state.set_manual_override()
     ptz, token = get_camera_services(camera_id)
     ptz.Stop({"ProfileToken": token})
     time.sleep(0.2)
@@ -167,6 +175,7 @@ def goto_preset(camera_id, request: PresetActionRequest):
 
 @router.post("/cameras/remove_preset")
 def remove_preset(camera_id, request: PresetActionRequest):
+    state.set_manual_override()
     ptz, token = get_camera_services(camera_id)
     ptz.RemovePreset({
         'ProfileToken': token,
@@ -183,7 +192,7 @@ class AbsoluteMoveRequest(BaseModel):
 
 @router.post("/cameras/absolute_move")
 def absolute_move_camera(camera_id, move: AbsoluteMoveRequest):
-
+    state.set_manual_override()
     ptz, token = get_camera_services(camera_id)
 
     # Create the request object from the WSDL

@@ -1,41 +1,40 @@
+from pymongo import MongoClient
 from pyproj import Geod
 from typing import Optional, List
-from fastapi import APIRouter
-from pydantic import BaseModel, ValidationError
-from dotenv import load_dotenv
-import math
-import requests
-import time
-import json
-import asyncio
-import websockets
-import os
+from pydantic import BaseModel
 from .PTZ import absolute_move_camera
+from . import Estado as state
+import math
+import json
+import os
 
-load_dotenv()
+# Datos Base de datos
+DBMONGO_URI = MongoClient(os.getenv("BDMONGO_URI"))
+ASTRADAR_BD = DBMONGO_URI["astradar"]
+CONFIGURACION_DATA_COLLECTION = ASTRADAR_BD["configuracion_radar"]
 
 # --- 1. CONFIGURACIÓN Y CALIBRACIÓN DE LA CÁMARA ---
-CAM_LAT = float(os.getenv("RADAR_LAT"))  # Latitud de la cámara
-CAM_LON = float(os.getenv("RADAR_LON"))  # Longitud de la cámara
-CAM_ALT = float(os.getenv("CAM_ALT"))  # Altitud en metros sobre el nivel del mar 
-# -- Calibracion punto 0.0 de la camara o hacia donde va a quedar apuntando la camara por defecto
+CAM_LAT = CONFIGURACION_DATA_COLLECTION.find_one({}, {"_id": 0})["radar"].get("latitud") # Latitud de la cámara
+CAM_LON = CONFIGURACION_DATA_COLLECTION.find_one({}, {"_id": 0})["radar"].get("longitud") # Longitud de la cámara
+CAM_ALT = 60.0  # Altitud en metros sobre el nivel del mar (MSL)
 CAM_HEADING_DEGREES = 200.0
-
-# -- Calibracion dependiendo de la camara, para esta en especifico no es necesario cambiar mas
 MAX_PAN_DEGREES = 180.0
 MIN_ZOOM_DISTANCE = 20.0
 MAX_ZOOM_DISTANCE = 1000.0
 
-# --- CONFIGURACIÓN DE SERVICIOS EXTERNOS ---
-# URL de tu API de control de cámara Absolute_move
-# URL del WebSocket que provee los datos del radar Cambiar a API que traiga la informacion de la zona restringida 
-RADAR_WEBSOCKET_URL = "ws://10.30.7.14:8000/api/solo_punto"
+# --- 2. CALIBRACIÓN AVANZADA DE MONTAJE ---
+ENABLE_LEAN_CORRECTION = True
+LEAN_ANGLE_DEGREES = 0.0
+LEAN_DIRECTION_DEGREES = 0.0
+ZOOM_TILT_OFFSET_DEGREES = 0.0
 
-# --- Inicialización de la API ---
-router = APIRouter()
+# --- 3. ESTIMACIÓN DE ALTITUD (OPCIONAL) ---
+# Activa el cálculo de la altitud del objetivo a partir de la distancia del radar.
+# La suposición es que el objetivo siempre estará POR DEBAJO de la cámara.
+ESTIMATE_ALT_FROM_DISTANCE = True
 
 
-# --- Modelos Pydantic para la Validación de Datos ---
+# --- Modelos Pydantic ---
 class Punto(BaseModel):
     latitud: float
     longitud: float
@@ -51,46 +50,94 @@ class TrackData(BaseModel):
     poligono: Optional[dict] = None
 
 
+# --- FUNCIÓN DE NORMALIZACIÓN DE TILT CON NUEVO MAPEO ---
+def normalize_tilt_new_mapping(physical_angle_deg: float) -> float:
+    physical_angle_deg = max(-90.0, min(90.0, physical_angle_deg))
+    if physical_angle_deg >= 0:
+        normalized_value = 1.0 - (physical_angle_deg / 180.0)
+    else:
+        normalized_value = 1.0 + (physical_angle_deg / 60.0)
+    return max(-0.5, min(1.0, normalized_value))
+
+
 # --- Lógica de Cálculo y Control ---
 def calculate_ptz_for_gps_target(
     target_lat: float,
     target_lon: float,
     target_alt: Optional[float] = None,
     target_azimuth: Optional[float] = None,
+    target_slant_distance: Optional[float] = None,
 ):
-    """Calcula los valores normalizados de Pan, Tilt y Zoom para un objetivo."""
-    if target_alt is None:
-        target_alt = CAM_ALT
-
     geod = Geod(ellps="WGS84")
-
+    fwd_azimuth, _, distance_2d = geod.inv(
+        lons1=CAM_LON, lats1=CAM_LAT, lons2=target_lon, lats2=target_lat
+    )
     if target_azimuth is not None:
         fwd_azimuth = target_azimuth
-        _, _, distance_2d = geod.inv(
-            lons1=CAM_LON, lats1=CAM_LAT, lons2=target_lon, lats2=target_lat
-        )
-    else:
-        fwd_azimuth, _, distance_2d = geod.inv(
-            lons1=CAM_LON, lats1=CAM_LAT, lons2=target_lon, lats2=target_lat
-        )
 
-    delta_altitude = target_alt - CAM_ALT
+    # --- ✨ INICIO: LÓGICA DE ALTITUD CORREGIDA ✨ ---
+    delta_altitude = 0.0
+    if target_alt is not None:
+        delta_altitude = target_alt - CAM_ALT
+    elif ESTIMATE_ALT_FROM_DISTANCE and target_slant_distance is not None:
+        # Se verifica si la distancia inclinada es menor que la horizontal (imposible/error).
+        # Si esto ocurre, se asume diferencia de altura cero para evitar un error matemático.
+        if target_slant_distance < distance_2d:
+            delta_altitude = 0.0
+            # Descomenta la siguiente línea si quieres ver una advertencia en la consola
+            # print(f"⚠️ ADVERTENCIA: Distancia inclinada ({target_slant_distance:.2f}m) < horizontal ({distance_2d:.2f}m). Se asume altitud 0.")
+        else:
+            # Si la distancia es válida (>=), se procede con Pitágoras.
+            delta_alt_squared = target_slant_distance**2 - distance_2d**2
+            delta_altitude_magnitude = math.sqrt(delta_alt_squared)
+            delta_altitude = -delta_altitude_magnitude
+    # --- ✨ FIN: LÓGICA DE ALTITUD CORREGIDA ✨ ---
+
     elevation_angle_deg = math.degrees(math.atan2(delta_altitude, distance_2d))
     pan_angle_final = fwd_azimuth - CAM_HEADING_DEGREES
 
-    if pan_angle_final > 180:
-        pan_angle_final -= 360
-    elif pan_angle_final < -180:
-        pan_angle_final += 360
+    # --- Corrección de inclinación (Lean Correction) ---
+    corrected_pan_angle = pan_angle_final
+    corrected_elevation_angle = elevation_angle_deg
+    if ENABLE_LEAN_CORRECTION and LEAN_ANGLE_DEGREES != 0.0:
+        pan_rad, tilt_rad = (
+            math.radians(pan_angle_final),
+            math.radians(elevation_angle_deg),
+        )
+        lean_angle_rad, lean_direction_rad = (
+            math.radians(LEAN_ANGLE_DEGREES),
+            math.radians(LEAN_DIRECTION_DEGREES),
+        )
 
-    normalized_pan_raw = pan_angle_final / MAX_PAN_DEGREES
-    physical_tilt_angle = max(-90.0, min(0.0, elevation_angle_deg))
-    normalized_tilt_raw = (physical_tilt_angle + 90.0) / 90.0
-    safe_limit = 0.9999
-    normalized_pan = max(-safe_limit, min(safe_limit, normalized_pan_raw))
-    normalized_tilt = max(0.0, min(safe_limit, normalized_tilt_raw))
+        sin_new_tilt = math.sin(tilt_rad) * math.cos(lean_angle_rad) - math.cos(
+            tilt_rad
+        ) * math.sin(lean_angle_rad) * math.cos(pan_rad - lean_direction_rad)
+        sin_new_tilt = max(-1.0, min(1.0, sin_new_tilt))
+        new_tilt_rad = math.asin(sin_new_tilt)
+
+        y = math.sin(pan_rad - lean_direction_rad) * math.cos(tilt_rad)
+        x = math.cos(pan_rad - lean_direction_rad) * math.cos(tilt_rad) * math.cos(
+            lean_angle_rad
+        ) + math.sin(tilt_rad) * math.sin(lean_angle_rad)
+        new_pan_rad = math.atan2(y, x) + lean_direction_rad
+
+        corrected_pan_angle, corrected_elevation_angle = (
+            math.degrees(new_pan_rad),
+            math.degrees(new_tilt_rad),
+        )
+
+    # --- Ajuste de Pan, Zoom y Tilt Final ---
+    if corrected_pan_angle > 180:
+        corrected_pan_angle -= 360
+    elif corrected_pan_angle < -180:
+        corrected_pan_angle += 360
+
+    safe_limit_pan = 0.9999
+    normalized_pan = max(
+        -safe_limit_pan, min(safe_limit_pan, corrected_pan_angle / MAX_PAN_DEGREES)
+    )
+
     distance_3d = math.sqrt(distance_2d**2 + delta_altitude**2)
-
     if distance_3d <= MIN_ZOOM_DISTANCE:
         normalized_zoom = 0.0
     elif distance_3d >= MAX_ZOOM_DISTANCE:
@@ -100,56 +147,69 @@ def calculate_ptz_for_gps_target(
             MAX_ZOOM_DISTANCE - MIN_ZOOM_DISTANCE
         )
 
+    final_elevation_angle = corrected_elevation_angle + (
+        normalized_zoom * ZOOM_TILT_OFFSET_DEGREES
+    )
+
+    normalized_tilt = normalize_tilt_new_mapping(final_elevation_angle)
+
     return {"pan": normalized_pan, "tilt": normalized_tilt, "zoom": normalized_zoom}
 
+class AbsoluteMoveRequest(BaseModel):
+    pan: Optional[float] = None
+    tilt: Optional[float] = None
+    zoom: Optional[float] = None
 
 async def radar_websocket_client(message):
+    if state.manual_override:
+        print("⏸️ Control manual activo. Se ignorará el comando automático.")
+        return
 
-    camera_id_to_control = "cam"  # Nombre de la camara o id 
+    try:
+        data = json.loads(message)
+        # Asegura que 'data["puntos"]' sea una lista, incluso si es un solo diccionario.
+        if "puntos" in data:
+            # Si 'puntos' es un diccionario, lo envuelve en una lista
+            if isinstance(data["puntos"], dict):
+                data["puntos"] = [data["puntos"]]
+            # Si 'puntos' es una lista de listas, toma la primera
+            elif isinstance(data["puntos"], list) and data["puntos"] and isinstance(data["puntos"][0], list):
+                data["puntos"] = data["puntos"][0]
+
+        try:
+            # Esto asumirá que TrackData puede manejar una lista o un solo objeto
+            track_data = TrackData(**data)
+            
+            if not track_data.puntos:
+                print(" - El mensaje no contenía puntos para procesar.")
+                return 
+
+            for i, point in enumerate(track_data.puntos):
+
+                # Tu lógica de cálculo y movimiento de la cámara aquí
+                ptz_commands = calculate_ptz_for_gps_target(
+                    target_lat=point.latitud,
+                    target_lon=point.longitud,
+                    target_azimuth=point.azimut,
+                    target_slant_distance=point.distancia,
+                )
+
+                payload = {
+                    "pan": round(ptz_commands["pan"], 4),
+                    "tilt": round(ptz_commands["tilt"], 4),
+                }
+                
+                
+                move_request = AbsoluteMoveRequest(**payload)
 
 
-    data = json.loads(message)
-    track_data = TrackData(**data)  # Validar con Pydantic
+                absolute_move_camera("camara_principal",move_request)
 
-    if not track_data.puntos:
-        print("   - El mensaje no contenía puntos para procesar.")
-
-    # Procesar cada punto recibido en el mensaje
-    for i, point in enumerate(track_data.puntos):
-        print(
-            f"\n--- Procesando Punto de Track #{i + 1} de la trama ---"
-        )
-
-        ptz_commands = calculate_ptz_for_gps_target(
-            target_lat=point.latitud,
-            target_lon=point.longitud,
-            target_alt=None,  # Asumiendo que no viene altitud
-            target_azimuth=point.azimut,
-        )
-
-        payload = {
-            "pan": round(ptz_commands["pan"], 4),
-            "tilt": round(ptz_commands["tilt"], 4),
-            # "zoom": round(ptz_commands["zoom"], 4) este lo tengo desactivado por 
-        }
-
-        print(f"   - Comandos PTZ calculados: {payload}")
-        absolute_move_camera(camera_id_to_control, payload)
-
-        # Si hay más de un punto en la misma trama, esperar 10 segundos
-        if i < len(track_data.puntos) - 1:
-            print(
-                f"\n...Esperando 10 segundos para el siguiente punto de la misma trama..."
-            )
+        except Exception as e:
+            print(f"Error inesperado durante el procesamiento de datos: {e}")
+    except Exception as e:
+        print(f"Error inesperado durante el procesamiento de datos: {e}")
 
 
-# --- Eventos de Ciclo de Vida de la API ---
-@router.on_event("startup")
-async def startup_event():
-    """Al iniciar la API, se lanza el cliente WebSocket como una tarea de fondo."""
-    print("🚀 Iniciando servicio de seguimiento...")
-    asyncio.create_task(radar_websocket_client())
-    
-    #Zona critica - roja
-    #Zona no alerta - gris
-    #Zona alerta atencion - amarilla
+
+

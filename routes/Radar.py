@@ -3,12 +3,14 @@ from dotenv import load_dotenv, set_key, find_dotenv
 from pymongo import MongoClient
 from pydantic import BaseModel
 from typing import List, Optional
+from .TrackPTZ import radar_websocket_client
 import websockets
 import asyncio
 import os
 import json
 import re
 import math
+
 
 
 router = APIRouter()
@@ -66,39 +68,47 @@ def rotate_point(x: float, y: float, angle_degrees: float) -> tuple:
     y_rotated = x * sin_theta + y * cos_theta
     return (x_rotated, y_rotated)
 
-# Calcula los cuatro vértices del polígono de detección del radar.
-def calcular_vertices_poligono(RADAR_RADIO_M, ANGULO_ROTACION, posiciones: dict) -> list:
-    # Define los límites del polígono sin rotación
-    x_max = RADAR_RADIO_M  # 652 metros al este
-    x_min = RADAR_RADIO_M * -1  # -652 metros al oeste
-    y_max = RADAR_RADIO_M  # 652 metros al norte
-    y_min = 0    # 0 metros al sur
+# Calcula los vértices del polígono de detección del radar.
+def calcular_vertices_poligono(
+    RADAR_RADIO_M, 
+    ANGULO_ROTACION, 
+    ANGULO_APERTURA, 
+    posiciones: dict
+) -> list:
+    """
+    Calcula los tres vértices del polígono de detección del radar en forma de cono.
+    """
+    # Convierte el alcance del radar a un nombre más claro
+    alcance_radar = RADAR_RADIO_M
+    
+    # El primer vértice es el centro del radar (0,0) en coordenadas cartesianas
+    vertices = [(0, 0)]
 
-    # Vértices del polígono sin rotación
-    vertices = [
-        (x_max, y_max), # Superior Derecho
-        (x_min, y_max), # Superior Izquierdo
-        (x_min, y_min), # Inferior Izquierdo
-        (x_max, y_min)  # Inferior Derecho
-    ]
+    # Calcula los ángulos de inicio y fin del cono.
+    # El ángulo de rotación se aplica al centro del cono.
+    angulo_inicio = ANGULO_ROTACION - ANGULO_APERTURA / 2
+    angulo_fin = ANGULO_ROTACION + ANGULO_APERTURA / 2
 
-    # Convierte el ángulo a radianes para los cálculos
-    angle_rad = math.radians(ANGULO_ROTACION)
-    cos_theta = math.cos(angle_rad)
-    sin_theta = math.sin(angle_rad)
-
+    # Calcula las coordenadas cartesianas del segundo y tercer vértice.
+    # Vértice 2: punto en el límite del alcance con el ángulo de inicio.
+    x2 = alcance_radar * math.cos(math.radians(90 - angulo_inicio))
+    y2 = alcance_radar * math.sin(math.radians(90 - angulo_inicio))
+    vertices.append((x2, y2))
+    
+    # Vértice 3: punto en el límite del alcance con el ángulo de fin.
+    x3 = alcance_radar * math.cos(math.radians(90 - angulo_fin))
+    y3 = alcance_radar * math.sin(math.radians(90 - angulo_fin))
+    vertices.append((x3, y3))
+    
     rotated_vertices_geographic = []
     
     for x, y in vertices:
-        # Aplica la fórmula de rotación
-        x_rotated = x * cos_theta - y * sin_theta
-        y_rotated = x * sin_theta + y * cos_theta
-        
-        # Convierte el vértice rotado a coordenadas geográficas
+        # Convierte el vértice cartesiano a coordenadas geográficas
         if posiciones:
-            lat, lon = convertir_cartesiano_a_geografico_configuracion(x_rotated, y_rotated, posiciones)
+            lat, lon = convertir_cartesiano_a_geografico_configuracion(x, y, posiciones)
         else:
-            lat, lon = convertir_cartesiano_a_geografico(x_rotated, y_rotated)
+            lat, lon = convertir_cartesiano_a_geografico(x, y)
+        
         rotated_vertices_geographic.append([lat, lon])
 
     return rotated_vertices_geographic
@@ -133,10 +143,18 @@ def punto_en_poligono(point: tuple, polygon: list) -> bool:
         
     return inside
 
+PRIORIDAD_ZONAS = {
+    "exterior": 1,
+    "atencion": 2,
+    "interior": 3,
+    "modulo": 4, 
+}
+
 @router.websocket("/radar")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     ZONAS_DE_DETECCION = list(ZONAS_COLLECTION.find({}, {"_id": 0}))
+
     while True:
         try:
             async with websockets.connect(
@@ -150,36 +168,31 @@ async def websocket_endpoint(websocket: WebSocket):
                     processed_data = re.sub(r'(\w+):', r'"\1":', radar_data_raw)
                     
                     try:
-                        # Asume que los datos son un JSON string
                         radar_data_json = json.loads(processed_data)
                         
                         if "data" in radar_data_json and isinstance(radar_data_json["data"], list):
                             processed_points = []
+                            
                             for point_data in radar_data_json["data"]:
-                                # Extrae las coordenadas cartesianas
                                 x_meters = point_data.get("x", 0)
                                 y_meters = point_data.get("y", 0)
-
-                                # Aplica la rotación a cada punto
                                 x_rotated, y_rotated = rotate_point(x_meters, y_meters, ANGULO_ROTACION)
-
-                                # Convierte a coordenadas geográficas
                                 latitud, longitud = convertir_cartesiano_a_geografico(x_rotated, y_rotated)
                                 
-                                # Verifica si el punto está dentro de alguna zona de peligro
                                 zona_detectada = None
-                                # Itera sobre las zonas cargadas
+                                prioridad_actual = 0
+                                
                                 for zona in ZONAS_DE_DETECCION:
-                                    # El polígono debe ser una lista de tuplas (lat, lon)
                                     zona_poligono = [tuple(c) for c in zona.get("coordinates", [])]
                                     
-                                    # Usa la función de detección de colisión
                                     if punto_en_poligono((latitud, longitud), zona_poligono):
-                                        zona_detectada = zona
-                                        break  # Sal de este bucle si encuentras una zona
-
-                                # Estructura el JSON de salida con las coordenadas geográficas
-                                # y el polígono pre-calculado
+                                        categoria_zona = zona.get("category")
+                                        prioridad_zona = PRIORIDAD_ZONAS.get(categoria_zona, 0)
+                                        
+                                        if prioridad_zona > prioridad_actual:
+                                            prioridad_actual = prioridad_zona
+                                            zona_detectada = zona
+                                
                                 puntos_a_enviar = {
                                     "id": point_data.get("id"),
                                     "type": point_data.get("type"),
@@ -189,7 +202,6 @@ async def websocket_endpoint(websocket: WebSocket):
                                     "distancia": point_data.get("d")
                                 }
                                 
-                                # Si se detectó una zona, agrégala al objeto del punto
                                 if zona_detectada:
                                     puntos_a_enviar["zona_alerta"] = {
                                         "id": zona_detectada.get("id"),
@@ -198,16 +210,22 @@ async def websocket_endpoint(websocket: WebSocket):
                                         "category": zona_detectada.get("category")
                                     }
                                     
+                                    # Llama al cliente de websocket para mover la cámara
+                                    # La lógica aquí es que si se detectó una zona (la más prioritaria), se activa la cámara
+                                    mensaje_para_camara = {
+                                        "puntos": puntos_a_enviar
+                                    }
+                                    mensaje_json_str = json.dumps(mensaje_para_camara)
+                                    await radar_websocket_client(mensaje_json_str)
+
                                 processed_points.append(puntos_a_enviar)
-                                
-                        processed_data = {
+                            
+                            processed_data = {
                                 "puntos": processed_points
                             }
-                                                
-                        await websocket.send_json(processed_data)
+                            await websocket.send_json(processed_data)
                     
                     except json.JSONDecodeError:
-                        # Maneja el caso en que los datos no sean un JSON válido
                         print(f"Datos recibidos no son un JSON válido: {radar_data_raw}")
                     
         except websockets.exceptions.ConnectionClosed as e:
@@ -225,14 +243,16 @@ async def websocket_endpoint(websocket: WebSocket):
         except Exception as e:
             print(f"Error inesperado: {e}. Cerrando conexión...")
             break
-        
+            
     await websocket.close()
+
 
 
 @router.websocket("/solo_punto")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     ZONAS_DE_DETECCION = list(ZONAS_COLLECTION.find({}, {"_id": 0}))
+    print(ZONAS_DE_DETECCION)
     while True:
         try:
             async with websockets.connect(
@@ -363,7 +383,7 @@ async def configurar_radar(config: RadarConfig):
                         "angulo_rotacion": float(config.angulo_rotacion)
                     },
                     "poligono": {
-                        "vertices": calcular_vertices_poligono(float(config.radar_radio_m), float(config.angulo_rotacion), posiciones)
+                        "vertices": calcular_vertices_poligono(float(config.radar_radio_m), float(config.angulo_rotacion), 45, posiciones)
                     }
                 }
             },
@@ -434,7 +454,7 @@ async def agregar_zona(zona: nuevaZona):
     
     # 3. Insertar el nuevo documento en la colección de zonas
     ZONAS_COLLECTION.insert_one(nueva_zona_con_id)    
-    # 6. Retornar la nueva zona creada
+    
     return {
             "msg": "Zona creada con éxito."
             }

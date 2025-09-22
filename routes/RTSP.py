@@ -10,7 +10,8 @@ router = APIRouter()
 # Usamos un diccionario para gestionar múltiples cámaras fácilmente
 CAMERA_URLS = {
     "1": "rtsp://admin:admin888@10.30.7.230/Stream/Live/101?transportmode=unicast&profile=ONFProfileToken_101",
-    "2": "rtsp://admin:admin888@10.30.7.230/Stream/Live/201?transportmode=unicast&profile=ONFProfileToken_201", 
+    "2": "rtsp://admin:dmin888@10.30.7.230/Stream/Live/201?transportmode=unicast&profile=ONFProfileToken_201", 
+    "3": "rtsp://admin:quiriquina1@10.30.7.231:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif"
     # Puedes añadir más cámaras aquí: "3": "rtsp://..."
 }
 
