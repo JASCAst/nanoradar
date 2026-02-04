@@ -35,7 +35,7 @@ async def get_usuarios(
 async def create_usuario(
     usuario: UsuarioCreateSchema, 
     db: AsyncIOMotorDatabase = Depends(get_db_mongo),
-    current_user: dict = proteccion_user
+    #current_user: dict = proteccion_user
 ):
     usuario_dict = usuario.dict()
     usuario_dict["password"] = hash_password(usuario_dict["password"])
@@ -99,3 +99,4 @@ async def delete_usuario(id: str, db: AsyncIOMotorDatabase = Depends(get_db_mong
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
         
     return {"message": "Usuario eliminado correctamente"}
+

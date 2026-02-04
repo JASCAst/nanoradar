@@ -31,6 +31,7 @@ RADAR_LON = CONFIGURACION_DATA_COLLECTION.find_one({}, {"_id": 0})["radar"].get(
 RADAR_RADIO_M = CONFIGURACION_DATA_COLLECTION.find_one({}, {"_id": 0})["radar"].get("radar_radio_m")#float(os.getenv("RADAR_RADIO_M")) 
 METROS_POR_GRADO_LATITUD = float(os.getenv("METROS_POR_GRADO_LATITUD"))
 ANGULO_ROTACION = CONFIGURACION_DATA_COLLECTION.find_one({}, {"_id": 0})["radar"].get("angulo_rotacion") #float(os.getenv("ANGULO_ROTACION"))
+GRADO_INCLINACION = 40
 
 # Funcion encargada de convertir los puntos cardinales en latitud y longitud
 # Los datos transformados dependen totalmente de la latidud y longitud del radar
@@ -153,6 +154,16 @@ PRIORIDAD_ZONAS = {
 @router.websocket("/radar")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
+    
+    # Obtener configuración y zonas una sola vez al inicio
+    try:
+        radar_config = CONFIGURACION_DATA_COLLECTION.find_one({}, {"_id": 0})["radar"]
+        ANGULO_ROTACION = float(radar_config.get("angulo_rotacion", 0))
+    except (TypeError, KeyError, ValueError):
+        print("Error: No se pudo obtener la configuración del radar o el ángulo de rotación no es numérico.")
+        await websocket.close()
+        return
+    
     ZONAS_DE_DETECCION = list(ZONAS_COLLECTION.find({}, {"_id": 0}))
 
     while True:
@@ -174,9 +185,12 @@ async def websocket_endpoint(websocket: WebSocket):
                             processed_points = []
                             
                             for point_data in radar_data_json["data"]:
-                                x_meters = point_data.get("x", 0)
-                                y_meters = point_data.get("y", 0)
-                                x_rotated, y_rotated = rotate_point(x_meters, y_meters, ANGULO_ROTACION)
+                                x_meters = float(point_data.get("x", 0))
+                                y_meters = float(point_data.get("y", 0))
+                                
+                                x_adjusted = -x_meters
+                                y_adjusted = -y_meters
+                                x_rotated, y_rotated = rotate_point(x_adjusted, y_adjusted, ANGULO_ROTACION + GRADO_INCLINACION)
                                 latitud, longitud = convertir_cartesiano_a_geografico(x_rotated, y_rotated)
                                 
                                 zona_detectada = None
@@ -198,8 +212,8 @@ async def websocket_endpoint(websocket: WebSocket):
                                     "type": point_data.get("type"),
                                     "latitud": latitud,
                                     "longitud": longitud,
-                                    "azimut": point_data.get("a"),
-                                    "distancia": point_data.get("d")
+                                    "azimut": float(point_data.get("a")),
+                                    "distancia": float(point_data.get("d"))
                                 }
                                 
                                 if zona_detectada:
