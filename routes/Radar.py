@@ -79,7 +79,7 @@ def convertir_cartesiano_a_geografico_configuracion(x_meters: float, y_meters: f
     return (new_lat, new_lon)
 
 # Mueve la función de rotación a un lugar reutilizable
-def rotate_point(x: float, y: float, angle_degrees: float) -> tuple:
+def rotate_point(x, y, angle_degrees):
     """Aplica la rotación a un punto (x, y)."""
     rad = math.radians(angle_degrees)
     
