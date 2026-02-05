@@ -81,12 +81,17 @@ def convertir_cartesiano_a_geografico_configuracion(x_meters: float, y_meters: f
 # Mueve la función de rotación a un lugar reutilizable
 def rotate_point(x: float, y: float, angle_degrees: float) -> tuple:
     """Aplica la rotación a un punto (x, y)."""
-    angle_rad = math.radians(angle_degrees)
-    cos_theta = math.cos(angle_rad)
-    sin_theta = math.sin(angle_rad)
-    x_rotated = x * cos_theta - y * sin_theta
-    y_rotated = x * sin_theta + y * cos_theta
-    return (x_rotated, y_rotated)
+    rad = math.radians(angle_degrees)
+    
+    new_x = x * math.cos(rad) + y * math.sin(rad)
+    new_y = -x * math.sin(rad) + y * math.cos(rad)
+    
+    # angle_rad = math.radians(angle_degrees)
+    # cos_theta = math.cos(angle_rad)
+    # sin_theta = math.sin(angle_rad)
+    # x_rotated = x * cos_theta - y * sin_theta
+    # y_rotated = x * sin_theta + y * cos_theta
+    return new_x, new_y
 
 # Calcula los vértices del polígono de detección del radar.
 def calcular_vertices_poligono(
@@ -213,7 +218,7 @@ async def process_radar_logic(radar_data_json, ANGULO_ROTACION, ZONAS_DE_DETECCI
             
             x_adjusted = -x_meters
             y_adjusted = -y_meters
-            anguloTotalRotacion = (ANGULO_ROTACION + GRADO_INCLINACION) % 360
+            anguloTotalRotacion = ANGULO_ROTACION + GRADO_INCLINACION
             x_rotated, y_rotated = rotate_point(x_adjusted, y_adjusted, anguloTotalRotacion)
             latitud, longitud = convertir_cartesiano_a_geografico(x_rotated, y_rotated)
             
