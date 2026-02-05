@@ -1,4 +1,4 @@
-from fastapi import APIRouter, WebSocket
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from dotenv import load_dotenv, set_key, find_dotenv
 from pymongo import MongoClient
 from pydantic import BaseModel
@@ -10,8 +10,6 @@ import os
 import json
 import re
 import math
-
-
 
 router = APIRouter()
 load_dotenv() 
@@ -32,6 +30,27 @@ RADAR_RADIO_M = CONFIGURACION_DATA_COLLECTION.find_one({}, {"_id": 0})["radar"].
 METROS_POR_GRADO_LATITUD = float(os.getenv("METROS_POR_GRADO_LATITUD"))
 ANGULO_ROTACION = CONFIGURACION_DATA_COLLECTION.find_one({}, {"_id": 0})["radar"].get("angulo_rotacion") #float(os.getenv("ANGULO_ROTACION"))
 GRADO_INCLINACION = 40
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
+
+    async def broadcast(self, message: dict):
+        for connection in self.active_connections:
+            try:
+                await connection.send_json(message)
+            except Exception:
+                # Si falla, el cliente probablemente se desconectó
+                pass
+
+manager = ConnectionManager()
 
 # Funcion encargada de convertir los puntos cardinales en latitud y longitud
 # Los datos transformados dependen totalmente de la latidud y longitud del radar
@@ -150,6 +169,110 @@ PRIORIDAD_ZONAS = {
     "interior": 3,
     "modulo": 4, 
 }
+
+async def radar_listener_task():
+    while True:
+        try:
+            # Tip: Mueve la carga de config fuera del 'while True' interno 
+            # para no saturar la base de datos en cada punto recibido.
+            radar_config = CONFIGURACION_DATA_COLLECTION.find_one({}, {"_id": 0})["radar"]
+            ANGULO_ROTACION = float(radar_config.get("angulo_rotacion", 0))
+            ZONAS_DE_DETECCION = list(ZONAS_COLLECTION.find({}, {"_id": 0}))
+
+            async with websockets.connect(RADAR_WEBSOCKET_URL, ping_interval=30, ping_timeout=60) as radar_ws:
+                print("Conectado al radar (Conexión Única)")
+                while True:
+                    radar_data_raw = await radar_ws.recv()
+                    
+                    # --- CRÍTICO: Limpiar el string antes de convertir a JSON ---
+                    processed_str = re.sub(r'(\w+):', r'"\1":', radar_data_raw)
+                    try:
+                        radar_data_json = json.loads(processed_str)
+                        # Pasar el JSON ya convertido a la lógica
+                        processed_data = await process_radar_logic(radar_data_json, ANGULO_ROTACION, ZONAS_DE_DETECCION)
+                        
+                        if processed_data:
+                            await manager.broadcast(processed_data)
+                    except websockets.ConnectionClosed:
+                        print("Conexión con el radar cerrada. Reintentando...")
+                        break
+                    
+        except Exception as e:
+            print(f"Error en conexión radar: {e}. Reintentando en 5s...")
+            await asyncio.sleep(5)
+
+async def process_radar_logic(radar_data_json, ANGULO_ROTACION, ZONAS_DE_DETECCION):
+        if "data" not in radar_data_json or not isinstance(radar_data_json["data"], list):
+            return None
+        
+        processed_points = []
+        
+        for point_data in radar_data_json["data"]:
+            x_meters = float(point_data.get("x", 0))
+            y_meters = float(point_data.get("y", 0))
+            
+            x_adjusted = -x_meters
+            y_adjusted = -y_meters
+            x_rotated, y_rotated = rotate_point(x_adjusted, y_adjusted, ANGULO_ROTACION + GRADO_INCLINACION)
+            latitud, longitud = convertir_cartesiano_a_geografico(x_rotated, y_rotated)
+            
+            zona_detectada = None
+            prioridad_actual = 0
+            
+            for zona in ZONAS_DE_DETECCION:
+                zona_poligono = [tuple(c) for c in zona.get("coordinates", [])]
+                
+                if punto_en_poligono((latitud, longitud), zona_poligono):
+                    categoria_zona = zona.get("category")
+                    prioridad_zona = PRIORIDAD_ZONAS.get(categoria_zona, 0)
+                    
+                    if prioridad_zona > prioridad_actual:
+                        prioridad_actual = prioridad_zona
+                        zona_detectada = zona
+            
+            puntos_a_enviar = {
+                "id": point_data.get("id"),
+                "type": point_data.get("type"),
+                "latitud": latitud,
+                "longitud": longitud,
+                "azimut": float(point_data.get("a")),
+                "distancia": float(point_data.get("d"))
+            }
+            
+            if zona_detectada:
+                puntos_a_enviar["zona_alerta"] = {
+                    "id": zona_detectada.get("id"),
+                    "name": zona_detectada.get("name"),
+                    "color": zona_detectada.get("color"),
+                    "category": zona_detectada.get("category")
+                }
+                
+                # Llama al cliente de websocket para mover la cámara
+                # La lógica aquí es que si se detectó una zona (la más prioritaria), se activa la cámara
+                mensaje_para_camara = {
+                    "puntos": puntos_a_enviar
+                }
+                mensaje_json_str = json.dumps(mensaje_para_camara)
+                await radar_websocket_client(mensaje_json_str)
+
+            processed_points.append(puntos_a_enviar)
+        
+        processed_data = {
+            "puntos": processed_points
+        }
+        
+        return processed_data
+    
+@router.websocket("/radar")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            # Mantener la conexión abierta esperando mensajes del cliente (si los hay)
+            # o simplemente bloqueado hasta que se cierre.
+            await websocket.receive_text() 
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
 
 @router.websocket("/radar")
 async def websocket_endpoint(websocket: WebSocket):
