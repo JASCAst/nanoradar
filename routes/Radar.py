@@ -213,7 +213,8 @@ async def process_radar_logic(radar_data_json, ANGULO_ROTACION, ZONAS_DE_DETECCI
             
             x_adjusted = -x_meters
             y_adjusted = -y_meters
-            x_rotated, y_rotated = rotate_point(x_adjusted, y_adjusted, ANGULO_ROTACION + GRADO_INCLINACION)
+            anguloTotalRotacion = (ANGULO_ROTACION + GRADO_INCLINACION) % 360
+            x_rotated, y_rotated = rotate_point(x_adjusted, y_adjusted, anguloTotalRotacion)
             latitud, longitud = convertir_cartesiano_a_geografico(x_rotated, y_rotated)
             
             zona_detectada = None
@@ -274,114 +275,114 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
-@router.websocket("/radar")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
+# @router.websocket("/radar")
+# async def websocket_endpoint(websocket: WebSocket):
+#     await websocket.accept()
     
-    # Obtener configuración y zonas una sola vez al inicio
-    try:
-        radar_config = CONFIGURACION_DATA_COLLECTION.find_one({}, {"_id": 0})["radar"]
-        ANGULO_ROTACION = float(radar_config.get("angulo_rotacion", 0))
-    except (TypeError, KeyError, ValueError):
-        print("Error: No se pudo obtener la configuración del radar o el ángulo de rotación no es numérico.")
-        await websocket.close()
-        return
+#     # Obtener configuración y zonas una sola vez al inicio
+#     try:
+#         radar_config = CONFIGURACION_DATA_COLLECTION.find_one({}, {"_id": 0})["radar"]
+#         ANGULO_ROTACION = float(radar_config.get("angulo_rotacion", 0))
+#     except (TypeError, KeyError, ValueError):
+#         print("Error: No se pudo obtener la configuración del radar o el ángulo de rotación no es numérico.")
+#         await websocket.close()
+#         return
     
-    ZONAS_DE_DETECCION = list(ZONAS_COLLECTION.find({}, {"_id": 0}))
+#     ZONAS_DE_DETECCION = list(ZONAS_COLLECTION.find({}, {"_id": 0}))
 
-    while True:
-        try:
-            async with websockets.connect(
-                RADAR_WEBSOCKET_URL,
-                ping_interval=30,
-                ping_timeout=60
-            ) as radar_ws:
-                print("Conectado al radar. Iniciando retransmisión de datos...")
-                while True:
-                    radar_data_raw = await radar_ws.recv()
-                    processed_data = re.sub(r'(\w+):', r'"\1":', radar_data_raw)
+#     while True:
+#         try:
+#             async with websockets.connect(
+#                 RADAR_WEBSOCKET_URL,
+#                 ping_interval=30,
+#                 ping_timeout=60
+#             ) as radar_ws:
+#                 print("Conectado al radar. Iniciando retransmisión de datos...")
+#                 while True:
+#                     radar_data_raw = await radar_ws.recv()
+#                     processed_data = re.sub(r'(\w+):', r'"\1":', radar_data_raw)
                     
-                    try:
-                        radar_data_json = json.loads(processed_data)
+#                     try:
+#                         radar_data_json = json.loads(processed_data)
                         
-                        if "data" in radar_data_json and isinstance(radar_data_json["data"], list):
-                            processed_points = []
+#                         if "data" in radar_data_json and isinstance(radar_data_json["data"], list):
+#                             processed_points = []
                             
-                            for point_data in radar_data_json["data"]:
-                                x_meters = float(point_data.get("x", 0))
-                                y_meters = float(point_data.get("y", 0))
+#                             for point_data in radar_data_json["data"]:
+#                                 x_meters = float(point_data.get("x", 0))
+#                                 y_meters = float(point_data.get("y", 0))
                                 
-                                x_adjusted = -x_meters
-                                y_adjusted = -y_meters
-                                x_rotated, y_rotated = rotate_point(x_adjusted, y_adjusted, ANGULO_ROTACION + GRADO_INCLINACION)
-                                latitud, longitud = convertir_cartesiano_a_geografico(x_rotated, y_rotated)
+#                                 x_adjusted = -x_meters
+#                                 y_adjusted = -y_meters
+#                                 x_rotated, y_rotated = rotate_point(x_adjusted, y_adjusted, ANGULO_ROTACION + GRADO_INCLINACION)
+#                                 latitud, longitud = convertir_cartesiano_a_geografico(x_rotated, y_rotated)
                                 
-                                zona_detectada = None
-                                prioridad_actual = 0
+#                                 zona_detectada = None
+#                                 prioridad_actual = 0
                                 
-                                for zona in ZONAS_DE_DETECCION:
-                                    zona_poligono = [tuple(c) for c in zona.get("coordinates", [])]
+#                                 for zona in ZONAS_DE_DETECCION:
+#                                     zona_poligono = [tuple(c) for c in zona.get("coordinates", [])]
                                     
-                                    if punto_en_poligono((latitud, longitud), zona_poligono):
-                                        categoria_zona = zona.get("category")
-                                        prioridad_zona = PRIORIDAD_ZONAS.get(categoria_zona, 0)
+#                                     if punto_en_poligono((latitud, longitud), zona_poligono):
+#                                         categoria_zona = zona.get("category")
+#                                         prioridad_zona = PRIORIDAD_ZONAS.get(categoria_zona, 0)
                                         
-                                        if prioridad_zona > prioridad_actual:
-                                            prioridad_actual = prioridad_zona
-                                            zona_detectada = zona
+#                                         if prioridad_zona > prioridad_actual:
+#                                             prioridad_actual = prioridad_zona
+#                                             zona_detectada = zona
                                 
-                                puntos_a_enviar = {
-                                    "id": point_data.get("id"),
-                                    "type": point_data.get("type"),
-                                    "latitud": latitud,
-                                    "longitud": longitud,
-                                    "azimut": float(point_data.get("a")),
-                                    "distancia": float(point_data.get("d"))
-                                }
+#                                 puntos_a_enviar = {
+#                                     "id": point_data.get("id"),
+#                                     "type": point_data.get("type"),
+#                                     "latitud": latitud,
+#                                     "longitud": longitud,
+#                                     "azimut": float(point_data.get("a")),
+#                                     "distancia": float(point_data.get("d"))
+#                                 }
                                 
-                                if zona_detectada:
-                                    puntos_a_enviar["zona_alerta"] = {
-                                        "id": zona_detectada.get("id"),
-                                        "name": zona_detectada.get("name"),
-                                        "color": zona_detectada.get("color"),
-                                        "category": zona_detectada.get("category")
-                                    }
+#                                 if zona_detectada:
+#                                     puntos_a_enviar["zona_alerta"] = {
+#                                         "id": zona_detectada.get("id"),
+#                                         "name": zona_detectada.get("name"),
+#                                         "color": zona_detectada.get("color"),
+#                                         "category": zona_detectada.get("category")
+#                                     }
                                     
-                                    # Llama al cliente de websocket para mover la cámara
-                                    # La lógica aquí es que si se detectó una zona (la más prioritaria), se activa la cámara
-                                    mensaje_para_camara = {
-                                        "puntos": puntos_a_enviar
-                                    }
-                                    mensaje_json_str = json.dumps(mensaje_para_camara)
-                                    await radar_websocket_client(mensaje_json_str)
+#                                     # Llama al cliente de websocket para mover la cámara
+#                                     # La lógica aquí es que si se detectó una zona (la más prioritaria), se activa la cámara
+#                                     mensaje_para_camara = {
+#                                         "puntos": puntos_a_enviar
+#                                     }
+#                                     mensaje_json_str = json.dumps(mensaje_para_camara)
+#                                     await radar_websocket_client(mensaje_json_str)
 
-                                processed_points.append(puntos_a_enviar)
+#                                 processed_points.append(puntos_a_enviar)
                             
-                            processed_data = {
-                                "puntos": processed_points
-                            }
-                            await websocket.send_json(processed_data)
+#                             processed_data = {
+#                                 "puntos": processed_points
+#                             }
+#                             await websocket.send_json(processed_data)
                     
-                    except json.JSONDecodeError:
-                        print(f"Datos recibidos no son un JSON válido: {radar_data_raw}")
+#                     except json.JSONDecodeError:
+#                         print(f"Datos recibidos no son un JSON válido: {radar_data_raw}")
                     
-        except websockets.exceptions.ConnectionClosed as e:
-            if e.code == 1000:
-                print("El cliente se ha desconectado o la conexión con el radar se cerró normalmente.")
-                return
-            else:
-                print(f"Conexión perdida. Razón: {e}. Reintentando...")
-                await asyncio.sleep(0.001)
+#         except websockets.exceptions.ConnectionClosed as e:
+#             if e.code == 1000:
+#                 print("El cliente se ha desconectado o la conexión con el radar se cerró normalmente.")
+#                 return
+#             else:
+#                 print(f"Conexión perdida. Razón: {e}. Reintentando...")
+#                 await asyncio.sleep(0.001)
 
-        except ConnectionRefusedError:
-            print("Conexión con el radar rechazada. Reintentando en 1 segundo...")
-            await asyncio.sleep(1)
+#         except ConnectionRefusedError:
+#             print("Conexión con el radar rechazada. Reintentando en 1 segundo...")
+#             await asyncio.sleep(1)
         
-        except Exception as e:
-            print(f"Error inesperado: {e}. Cerrando conexión...")
-            break
+#         except Exception as e:
+#             print(f"Error inesperado: {e}. Cerrando conexión...")
+#             break
             
-    await websocket.close()
+#     await websocket.close()
 
 
 
