@@ -218,7 +218,7 @@ async def process_radar_logic(radar_data_json, ANGULO_ROTACION, ZONAS_DE_DETECCI
             
             x_adjusted = -x_meters
             y_adjusted = -y_meters
-            anguloTotalRotacion = (ANGULO_ROTACION + GRADO_INCLINACION) - 20
+            anguloTotalRotacion = (ANGULO_ROTACION + GRADO_INCLINACION) - 30
             x_rotated, y_rotated = rotate_point(x_meters, y_meters, anguloTotalRotacion)
             latitud, longitud = convertir_cartesiano_a_geografico(x_rotated, y_rotated)
             
