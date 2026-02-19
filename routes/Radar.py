@@ -175,6 +175,41 @@ PRIORIDAD_ZONAS = {
     "modulo": 4, 
 }
 
+def calcular_centroide_zona(coordinates: list) -> tuple:
+    """
+    Calcula el centroide (centro geométrico) de un polígono.
+    """
+    if not coordinates:
+        return (0, 0)
+    
+    lat_sum = sum(coord[0] for coord in coordinates)
+    lon_sum = sum(coord[1] for coord in coordinates)
+    n = len(coordinates)
+    
+    return (lat_sum / n, lon_sum / n)
+
+def detectar_severidad_por_nombre(nombre_zona: str) -> str:
+    """
+    Determina la severidad de la alerta basándose en el nombre de la zona.
+    El cliente define el nombre, por lo que buscamos palabras clave.
+    """
+    nombre_lower = nombre_zona.lower()
+    
+    # Palabras clave para severidad crítica
+    if any(palabra in nombre_lower for palabra in ["critica", "crítica", "peligro", "emergencia", "prohibido"]):
+        return "critica"
+    
+    # Palabras clave para severidad alta
+    if any(palabra in nombre_lower for palabra in ["alerta", "restriccion", "restricción", "interior", "control"]):
+        return "alta"
+    
+    # Palabras clave para severidad media
+    if any(palabra in nombre_lower for palabra in ["atencion", "atención", "precaucion", "precaución", "zona"]):
+        return "media"
+    
+    # Por defecto, severidad baja
+    return "baja"
+
 async def radar_listener_task():
     while True:
         try:
@@ -211,6 +246,7 @@ async def process_radar_logic(radar_data_json, ANGULO_ROTACION, ZONAS_DE_DETECCI
             return None
         
         processed_points = []
+        alertas_detectadas = []
         
         for point_data in radar_data_json["data"]:
             x_meters = float(point_data.get("x", 0))
@@ -253,6 +289,33 @@ async def process_radar_logic(radar_data_json, ANGULO_ROTACION, ZONAS_DE_DETECCI
                     "category": zona_detectada.get("category")
                 }
                 
+                # Crear alerta basada en el nombre de la zona
+                nombre_zona = zona_detectada.get("name", "")
+                centroide = calcular_centroide_zona(zona_detectada.get("coordinates", []))
+                severidad = detectar_severidad_por_nombre(nombre_zona)
+                
+                alerta = {
+                    "punto_id": point_data.get("id"),
+                    "tipo_punto": point_data.get("type"),
+                    "posicion_detectada": {
+                        "latitud": latitud,
+                        "longitud": longitud
+                    },
+                    "centroide_zona": {
+                        "latitud": centroide[0],
+                        "longitud": centroide[1]
+                    },
+                    "zona": {
+                        "id": zona_detectada.get("id"),
+                        "nombre": nombre_zona,
+                        "color": zona_detectada.get("color")
+                    },
+                    "severidad": severidad,
+                    "timestamp": asyncio.get_event_loop().time()
+                }
+                
+                alertas_detectadas.append(alerta)
+                
                 # Llama al cliente de websocket para mover la cámara
                 # La lógica aquí es que si se detectó una zona (la más prioritaria), se activa la cámara
                 mensaje_para_camara = {
@@ -264,7 +327,8 @@ async def process_radar_logic(radar_data_json, ANGULO_ROTACION, ZONAS_DE_DETECCI
             processed_points.append(puntos_a_enviar)
         
         processed_data = {
-            "puntos": processed_points
+            "puntos": processed_points,
+            "alertas": alertas_detectadas
         }
         
         return processed_data
