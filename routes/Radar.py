@@ -22,6 +22,7 @@ ASTRADAR_BD = DBMONGO_URI["astradar"]
 DATA_COLLECTION = ASTRADAR_BD["data"]
 CONFIGURACION_DATA_COLLECTION = ASTRADAR_BD["configuracion_radar"]
 ZONAS_COLLECTION = ASTRADAR_BD["zonas"]
+ALERTAS_COLLECTION = ASTRADAR_BD["alertas"]
 
 # Posición del radar
 RADAR_LAT = CONFIGURACION_DATA_COLLECTION.find_one({}, {"_id": 0})["radar"].get("latitud") #float(os.getenv("RADAR_LAT"))
@@ -315,6 +316,8 @@ async def process_radar_logic(radar_data_json, ANGULO_ROTACION, ZONAS_DE_DETECCI
                 }
                 
                 alertas_detectadas.append(alerta)
+                #Almacenar en la coleccion de alertas
+                ALERTAS_COLLECTION.insert_one(alerta)
                 
                 # Llama al cliente de websocket para mover la cámara
                 # La lógica aquí es que si se detectó una zona (la más prioritaria), se activa la cámara
