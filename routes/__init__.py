@@ -7,6 +7,7 @@ from .Radar import router as radar_router
 #from .PTZ import router as ptz_router
 from .Usuario import router as usuario_router
 from .login import router as login_router
+from .Alertas import router as alertas_router
 # from .RTSP import router as rtsp_router
 # from .TrackPTZ import router as trackptz_router
 
